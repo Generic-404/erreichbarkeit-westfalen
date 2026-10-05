@@ -1,0 +1,183 @@
+
+    {% macro script(this, kwargs) %}
+    const control = L.control({position: 'topright'});
+    // Erstellt Merkmalsauswahl, Auflösungsschalter und Legende der erweiterten Karte.
+    control.onAdd = function() {
+      const panel = L.DomUtil.create('div');
+      panel.style.background = 'white'; panel.style.padding = '10px'; panel.style.width = '330px'; panel.style.maxHeight='70vh'; panel.style.overflowY='auto';
+      const select = document.createElement('select'); select.style.width='100%'; select.setAttribute('aria-label', 'Kartenmerkmal');
+      const fieldLabels = {{this.fields}};
+      Object.entries(fieldLabels).forEach(([key,label]) => {
+        const option = document.createElement('option'); option.value=key;
+        option.textContent=label; select.appendChild(option);
+      });
+      const colors = {{this.colors}};
+      const overviewScales = {{this.scales}};
+      const detailScales = {{this.detail_scales}};
+      let scales = overviewScales;
+      let detailMode = false;
+      const priorityNames = ['Keine Personen der Bezugsgruppe', 'Keine erhöhte Priorität', 'Erhöhte Untersuchungspriorität', 'Hohe Untersuchungspriorität'];
+      const priorityColors = ['#eeeeee', '#b3cde3', '#fdae61', '#d73027'];
+      const classNames = ['Niedrig (regional)', 'Mittel (regional)', 'Hoch (regional)'];
+      const groupNames = {overall: 'Gesamt', education: 'Bildung', health: 'Gesundheit'};
+      const statusNames = {ok: 'Auswertbar', no_population: 'Keine Personen der Bezugsgruppe', unknown_score: 'Score fehlt', unknown_population: 'Personenzahl unbekannt', thresholds_unavailable: 'Keine Grenzwerte bestimmbar'};
+      // Erkennt ein Merkmal mit Untersuchungsprioritäten.
+      const isPriority = key => key.startsWith('priority_');
+      // Erkennt regionale Score- oder Bevölkerungsklassen.
+      const isClass = key => key.startsWith('score_class_') || key.startsWith('population_class_');
+      const thresholds = {{this.thresholds}};
+      const referenceArea = {{this.reference_area}};
+      const map = {{this.map}};
+
+      // Interpoliert eine Anzeigefarbe zwischen benachbarten Klassenfarben.
+      const blend = (palette, value, minimum) => {
+        const pos = Math.max(0, Math.min(palette.length-1, Number(value)-minimum));
+        const a = Math.floor(pos), b = Math.ceil(pos), part = pos-a;
+        // Zerlegt eine hexadezimale Farbe in ihre drei Farbkanäle.
+        const rgb = hex => [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));
+        const left = rgb(palette[a]), right = rgb(palette[b]);
+        return '#'+left.map((v,i)=>Math.round(v+(right[i]-v)*part).toString(16).padStart(2,'0')).join('');
+      };
+      // Wählt die Farbe für den aktuellen Score, die Klasse oder Priorität.
+      const colorFor = value => {
+        if(value === null || value === undefined || !Number.isFinite(Number(value))) return '#999999';
+        if(isPriority(select.value))return blend(priorityColors,value,0);
+        if(isClass(select.value))return blend(['#edf8b1', '#7fcdbb', '#225ea8'],value,1);
+        return colors[Math.round(100*Math.max(0,Math.min(1,Number(value)/scales[select.value])))];
+      };
+      // Formatiert Detailwerte und kennzeichnet Mittelwerte der Übersicht.
+      const formatValue = (key, value, overview = !detailMode) => {
+        if (value === null || value === undefined || !Number.isFinite(Number(value))) return 'keine Angabe';
+        if (overview) return 'Ø '+Number(value).toLocaleString('de-DE', {maximumFractionDigits: 2})+(isPriority(key)?' (0–3)':isClass(key)?' (1–3)':'');
+        if (isPriority(key)) return priorityNames[Number(value)];
+        if (isClass(key)) return classNames[Number(value)-1];
+        return Number(value).toLocaleString('de-DE', {maximumFractionDigits: 2});
+      };
+      // Erzeugt Zellinformationen einschließlich Datenstatus und Unsicherheitsangaben.
+      const makeCellDetails = properties => {
+        const box = document.createElement('div');
+        box.style.cssText = 'width:100%;min-width:0;overflow-wrap:anywhere;';
+        const overview = properties.represented_cells !== undefined;
+        const heading = document.createElement('strong');
+        heading.textContent = properties.grid_id;
+        box.appendChild(heading);
+        const table = document.createElement('table');
+        table.style.marginTop = '6px';
+        table.style.borderCollapse = 'collapse';
+        // Ergänzt eine beschriftete Zeile der Zelltabelle.
+        const addRow = (label, value) => {
+          const row = document.createElement('tr');
+          const name = document.createElement('td'); name.textContent = label;
+          name.style.padding = '2px 10px 2px 0';
+          const result = document.createElement('td'); result.textContent = value;
+          result.style.textAlign = 'right';
+          row.appendChild(name); row.appendChild(result); table.appendChild(row);
+        };
+        addRow('Datenstatus', properties.status || 'keine Angabe');
+        if (properties.represented_cells !== undefined)
+          addRow('100-m-Zellen', Number(properties.represented_cells).toLocaleString('de-DE'));
+        if (overview) addRow('Darstellung', 'Arithmetische Mittel vorhandener 100-m-Werte; Personenzahlen je 100-m-Zelle, keine Summe.');
+        Object.entries(fieldLabels).forEach(([key, label]) =>
+          addRow(label, formatValue(key, properties[key], overview)));
+        ['overall','education','health'].forEach(g => {
+          if (properties['evaluation_'+g+'_status']) addRow('Datenlage '+fieldLabels['priority_'+g], statusNames[properties['evaluation_'+g+'_status']] || 'Unbekannt');
+          for (let p=0;p<=3;p++) if (properties['overview_'+g+'_'+p] !== undefined)
+            addRow(priorityNames[p]+' ('+groupNames[g]+'), Zellen', properties['overview_'+g+'_'+p]);
+          if (properties['overview_'+g+'_unknown'] !== undefined)
+            addRow('Ohne Bewertung ('+groupNames[g]+'), Zellen', properties['overview_'+g+'_unknown']);
+        });
+        ['under18','65plus'].forEach(age => {
+          if (properties['population_'+age+'_uncertain'] === true) {
+            const count = properties['overview_'+age+'_uncertain_count'];
+            addRow('Altersanteil '+(age==='under18'?'unter 18':'ab 65'),
+              'Statistisch unsicher (KLAMMERN)'+(count!==undefined?' in '+count+' enthaltenen Zellen':''));
+          }
+        });
+        box.appendChild(table);
+        return box;
+      };
+      const legend = document.createElement('div');
+      legend.style.marginTop = '8px';
+      const bar = document.createElement('div');
+      bar.style.height = '12px'; bar.style.width = '180px';
+      bar.style.background = {{this.gradient}};
+      const limits = document.createElement('div');
+      limits.style.display = 'flex'; limits.style.justifyContent = 'space-between';
+      const low = document.createElement('span'); low.textContent = '0';
+      const high = document.createElement('span');
+      limits.appendChild(low); limits.appendChild(high);
+      const scaleNote = document.createElement('div');
+      scaleNote.style.maxWidth = '310px'; scaleNote.style.fontSize = '11px';
+      legend.appendChild(bar); legend.appendChild(limits); legend.appendChild(scaleNote);
+      // Passt Legende und Grenzwertangaben an Merkmal und Rasterauflösung an.
+      const updateLegend = function() {
+        const key = select.value;
+        if (isPriority(key) || isClass(key)) {
+          bar.style.display = 'none'; limits.style.display = 'none';
+          scaleNote.replaceChildren();
+          const names = isPriority(key) ? priorityNames : classNames;
+          const fills = isPriority(key) ? priorityColors : ['#edf8b1', '#7fcdbb', '#225ea8'];
+          names.forEach((name, i) => {
+            const row = document.createElement('div');
+            const swatch = document.createElement('span'); swatch.textContent='■ '; swatch.style.color=fills[i];
+            row.appendChild(swatch); row.appendChild(document.createTextNode((isPriority(key)?i:i+1)+': '+name)); scaleNote.appendChild(row);
+          });
+          const group = key.split('_').slice(-1)[0];
+          const t = thresholds[group];
+          const info = document.createElement('div');
+          // Formatiert Klassengrenzen für die Legendenbeschriftung.
+          const bound = values => values ? values.map(v=>Number(v).toLocaleString('de-DE', {maximumFractionDigits: 4})).join(' / ') : 'nicht bestimmbar';
+          info.textContent = 'Grenzen je 100-m-Zelle (ab): Score '+bound(t.score)+'; Personen '+bound(t.population)+'. Bezug: '+referenceArea+'. Grau: unbekannt.'+(!detailMode?' 1 km: arithmetischer Mittelwert der vorhandenen Klassencodes; Zwischenfarben zeigen Zwischenwerte. Keine neue Klassifikation.':'');
+          scaleNote.appendChild(info);
+        } else {
+          bar.style.display = 'block'; limits.style.display = 'flex';
+          high.textContent = Number(scales[key]).toLocaleString('de-DE', {maximumFractionDigits: 1}) + (key.startsWith('population_') ? '+' : '');
+          scaleNote.textContent = key.startsWith('population_')
+            ? (detailMode?'Personen je 100-m-Zelle.':'1 km: mittlere Personenzahl je 100-m-Zelle mit vorhandener Angabe, keine Summe.')+' Grau: keine Angabe.'
+            : 'Skala 0–100; 1 km: arithmetischer Mittelwert bekannter Werte. Grau: keine Angabe.';
+        }
+      };
+      updateLegend();
+      panel.appendChild(select);
+      const resolution = document.createElement('div');
+      resolution.setAttribute('role','group');resolution.setAttribute('aria-label','Rasterauflösung');
+      resolution.style.cssText='display:flex;gap:8px;margin:10px 0;align-items:center;';
+      const resolutionTitle=document.createElement('span');resolutionTitle.textContent='Raster:';resolution.appendChild(resolutionTitle);
+      const resolutionButtons = [1000,100].map(meters=>{
+        const button=document.createElement('button');button.type='button';button.textContent=meters===1000?'1 km':'100 m';
+        button.dataset.resolution=meters;button.setAttribute('aria-pressed',String(meters===1000));
+        button.style.cssText='padding:6px 12px;cursor:pointer;border:1px solid #777;border-radius:4px;';
+        button.style.background=meters===1000?'#dceaf7':'white';
+        resolution.appendChild(button);return button;
+      });
+      panel.appendChild(resolution);
+      panel.appendChild(legend);
+      const note=document.createElement('div'); note.textContent={{this.note}};
+      panel.appendChild(note);
+      const status=document.createElement('div');status.setAttribute('role','status');panel.appendChild(status);
+      const raster=createAccessibilityRaster(map, {
+        overviewUrl:{{this.overview_url}},tileRoot:{{this.tile_root}},tileKeys:{{this.tile_keys}},
+        tileZoom:{{this.tile_zoom}},status,
+        // Liefert das gewählte Attribut an den Rasterrenderer.
+        field:()=>select.value,color:colorFor,popup:makeCellDetails,
+        // Erstellt die kurze Wertanzeige für die Zelle unter dem Mauszeiger.
+        tooltip:properties=>{
+          const text=document.createElement('div');
+          text.textContent=properties.grid_id+' — '+fieldLabels[select.value]+': '+formatValue(select.value,properties[select.value]);return text;
+        },
+        // Aktualisiert Farbskalen und Legende beim Wechsel der Rasterauflösung.
+        onModeChange:detail=>{detailMode=detail;scales=detail?detailScales:overviewScales;updateLegend();}
+      });
+      map.accessibilityRaster=raster;
+      // Wechselt nach einem Tastenklick die aktive Rasterauflösung.
+      resolutionButtons.forEach(button=>button.onclick=()=>{
+        resolutionButtons.forEach(b=>{const active=b===button;b.setAttribute('aria-pressed',String(active));b.style.background=active?'#dceaf7':'white';});
+        raster.setResolution(Number(button.dataset.resolution));
+      });
+      // Aktualisiert Legende und Raster nach Auswahl eines anderen Merkmals.
+      select.onchange=()=>{updateLegend();raster.redraw();};
+      L.DomEvent.on(select,'pointerdown mousedown dblclick',L.DomEvent.stopPropagation);
+      L.DomEvent.disableClickPropagation(panel); L.DomEvent.disableScrollPropagation(panel); return panel;
+    }; control.addTo({{this.map}});
+    {% endmacro %}
+    

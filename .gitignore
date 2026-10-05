@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Generierte Ergebnisse und Arbeitsverzeichnisse.
+results/
+*.log
+
+# Große Eingangsdaten sind im vollständigen Release-Paket enthalten.
+# Die kleine Gebietsgrenze und Prüfsummen bleiben im Repository.
+data/**/*.csv
+data/**/*.osm.pbf
+data/**/*.zip

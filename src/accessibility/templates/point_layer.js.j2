@@ -1,0 +1,20 @@
+{% macro script(this, kwargs) %}
+        // Registriert das einmalige Nachladen einer POI- oder Haltestellenebene.
+        (()=>{
+          const group={{this.group}},map={{this.map}},renderer=L.canvas({pane:{{this.pane}}});
+          let loading=false,ready=false;
+          // Lädt und zeichnet die Punkte beim ersten Einschalten der Ebene.
+          map.on('overlayadd',event=>{
+            if(event.layer!==group||loading||ready)return;
+            loading=true;
+            fetch({{this.url}}).then(r=>{if(!r.ok)throw new Error('POI-Daten fehlen');return r.json();}).then(data=>{
+              L.geoJSON(data,{pane:{{this.pane}},pointToLayer:(f,ll)=>L.circleMarker(ll,{
+                pane:{{this.pane}},radius:{{this.radius}},color:{{this.color}},fillOpacity:.9,
+                renderer
+              }),onEachFeature:(f,l)=>{const text=document.createElement('span');
+                text.textContent={{this.attributes}}.map(k=>f.properties[k]||'').join(' — ');l.bindTooltip(text);}
+              }).addTo(group);ready=true;
+            }).catch(e=>{console.error(e);alert('Punkte konnten nicht geladen werden. Ebene erneut einschalten.');}).finally(()=>loading=false);
+          });
+        })();
+        {% endmacro %}

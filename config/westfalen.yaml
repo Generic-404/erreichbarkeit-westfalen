@@ -1,0 +1,119 @@
+# Relative Pfade beziehen sich auf diese Konfigurationsdatei.
+paths:
+  boundary: "../data/boundaries/Westfalen/westfalen_lippe/westfalen_lippe.shp"
+  osm_pbf: "../data/processed/westfalen/westfalen-15km.osm.pbf"
+  gtfs: "../data/gtfs/latest.zip"
+  output_directory: "../results/westfalen-v1"
+  census_csvs:
+    - "../data/Zensus Gitter Daten/Durchschnittsalter_in_Gitterzellen/Zensus2022_Durchschnittsalter_100m-Gitter.csv"
+    - "../data/Zensus Gitter Daten/Anteil_ab_65-jaehrige_in_Gitterzellen/Zensus2022_Anteil_ueber_65_100m-Gitter.csv"
+    - "../data/Zensus Gitter Daten/Anteil_unter_18-jaehrige_in_Gitterzellen/Zensus2022_Anteil_unter_18_100m-Gitter.csv"
+    - "../data/Zensus Gitter Daten/Zensus2022_Bevoelkerungszahl/Zensus2022_Bevoelkerungszahl_100m-Gitter.csv"
+
+area:
+  analysis_crs: "EPSG:25832"
+  buffer_km: 15
+  # Der bereitgestellte OSM-Ausschnitt enthält bereits den 15-km-Puffer.
+  crop_osm: false
+
+analysis:
+  reference_week: "2026-09-07"
+  timezone: "Europe/Berlin"
+  departure_time_window_minutes: 1
+  times:
+    - weekday: "Mittwoch"
+      time: "12:00"
+      weight: 1.0
+
+routing:
+  # 61 statt 60: R5 verwendet intern teilweise eine strikte Zeitgrenze.
+  maximum_travel_time_minutes: 61
+  maximum_route_walking_time_minutes: 15
+  maximum_grid_access_walking_time_minutes: 15
+  walking_speed_kmh: 4.5
+  snap_to_network: true
+  # Höchstens 25 Haltestellen je Block, nach Hilbert sortiert.
+  origin_batch_size: 25
+  compute_walk_only_matrix: false
+  candidate_selection:
+    enabled: true
+    candidates_per_category:
+      schools: 10
+      kindergartens: 10
+      pharmacies: 10
+      hospitals: 10
+      food: 10
+      chemists: 10
+      swimming: 10
+      cinemas: 10
+      banks: 10
+      townhalls: 10
+
+stops:
+  fallback_grouping_distance_meters: 100
+
+surface:
+  enabled: true
+  grid_size_meters: 100
+  airline_detour_factor: 1.25
+  include_direct_walk_to_poi: true
+
+# Gewichte sind Prozentanteile des Gesamtscores (Summe 100).
+# data_status: auto (Standard) -> null Treffer bedeutet unknown.
+# available nur bei dokumentiert geklärter Datenlage, unknown bei bekannten Lücken.
+poi_categories:
+  - id: schools
+    name: Schulen
+    weight: 10
+    osm_filters:
+      - {key: amenity, values: [school]}
+  - id: kindergartens
+    name: Kitas
+    weight: 5
+    osm_filters:
+      - {key: amenity, values: [kindergarten]}
+  - id: pharmacies
+    name: Apotheken
+    weight: 12.5
+    osm_filters:
+      - {key: amenity, values: [pharmacy]}
+      - {key: healthcare, values: [pharmacy]}
+  - id: hospitals
+    name: Krankenhäuser
+    weight: 12.5
+    osm_filters:
+      - {key: amenity, values: [hospital]}
+      - {key: healthcare, values: [hospital]}
+  - id: food
+    name: Lebensmittelgeschäfte
+    weight: 25
+    osm_filters:
+      - {key: shop, values: [supermarket, convenience]}
+  - id: chemists
+    name: Drogerien
+    weight: 5
+    osm_filters:
+      - {key: shop, values: [chemist]}
+  - id: swimming
+    name: Schwimmbäder
+    weight: 12
+    osm_filters:
+      - all:
+          - {key: leisure, values: [sports_centre, sports_hall]}
+          - {key: sport, values: [swimming], contains: true}
+      - {key: leisure, values: [water_park]}
+  - id: cinemas
+    name: Kinos
+    weight: 8
+    osm_filters:
+      - {key: amenity, values: [cinema]}
+  - id: banks
+    name: Banken
+    weight: 5
+    osm_filters:
+      - {key: amenity, values: [bank]}
+  - id: townhalls
+    name: Rathäuser
+    weight: 5
+    osm_filters:
+      - {key: amenity, values: [townhall]}

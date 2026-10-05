@@ -1,0 +1,152 @@
+
+    {% macro script(this, kwargs) %}
+    const control = L.control({position: 'topright'});
+    // Erstellt Merkmalsauswahl und Legende der Basiskarte.
+    control.onAdd = function() {
+      const panel = L.DomUtil.create('div');
+      panel.style.background = 'white'; panel.style.padding = '10px';
+      const select = document.createElement('select');
+      const fieldLabels = {{this.fields}};
+      Object.entries(fieldLabels).forEach(([key,label]) => {
+        const option = document.createElement('option'); option.value=key;
+        option.textContent=label; select.appendChild(option);
+      });
+      const colors = {{this.colors}};
+      const scales = {{this.scales}};
+      const map = {{this.map}};
+      const overview = {{this.layer}};
+      const tileZoom = {{this.tile_zoom}};
+      const switchZoom = {{this.switch_zoom}};
+      const availableTiles = new Set({{this.tile_keys}});
+      const detailLayers = new Map();
+      const pendingTiles = new Set();
+      let wantedTiles = new Set();
+      // Bestimmt Zellfarbe und Umrandung anhand des ausgewählten Merkmals.
+      const styleFor = feature => {
+        const value = feature.properties[select.value];
+        const missing = value === null || value === undefined || !Number.isFinite(Number(value));
+        const index = Math.round(100 * Math.max(0, Math.min(1, Number(value) / scales[select.value])));
+        return {fillColor: missing ? '#999999' : colors[index], fillOpacity: 0.8,
+                weight: 0.1, color: '#ffffff'};
+      };
+      // Formatiert einen Zellwert oder kennzeichnet eine fehlende Angabe.
+      const formatValue = (key, value) =>
+        value === null || value === undefined || !Number.isFinite(Number(value))
+          ? 'keine Angabe' : Number(value).toLocaleString('de-DE',
+              {maximumFractionDigits: key === 'zensus_4_Einwohner' ? 0 : 1});
+      // Erzeugt die Tabelle mit Attributen einer angeklickten Rasterzelle.
+      const makeCellDetails = properties => {
+        const box = document.createElement('div');
+        box.style.minWidth = '245px';
+        const heading = document.createElement('strong');
+        heading.textContent = properties.grid_id;
+        box.appendChild(heading);
+        const table = document.createElement('table');
+        table.style.marginTop = '6px';
+        table.style.borderCollapse = 'collapse';
+        // Ergänzt eine beschriftete Zeile der Zelltabelle.
+        const addRow = (label, value) => {
+          const row = document.createElement('tr');
+          const name = document.createElement('td'); name.textContent = label;
+          name.style.padding = '2px 10px 2px 0';
+          const result = document.createElement('td'); result.textContent = value;
+          result.style.textAlign = 'right';
+          row.appendChild(name); row.appendChild(result); table.appendChild(row);
+        };
+        addRow('Datenstatus', properties.status || 'keine Angabe');
+        if (properties.represented_cells !== undefined)
+          addRow('100-m-Zellen', Number(properties.represented_cells).toLocaleString('de-DE'));
+        Object.entries(fieldLabels).forEach(([key, label]) =>
+          addRow(label, formatValue(key, properties[key])));
+        box.appendChild(table);
+        return box;
+      };
+      // Verknüpft eine Rasterzelle mit Tooltip und Detailfenster.
+      const bindCellTooltip = cell => {
+        if (!cell.feature) return;
+        const value = cell.feature.properties[select.value];
+        const shown = formatValue(select.value, value);
+        cell.bindTooltip(cell.feature.properties.grid_id + '<br>' + select.options[select.selectedIndex].textContent + ': ' + shown);
+        if (!cell._detailsBound) {
+          cell.on('click', () => cell.bindPopup(makeCellDetails(cell.feature.properties),
+            {maxWidth: 370, maxHeight: 420}).openPopup());
+          cell._detailsBound = true;
+        }
+      };
+      const legend = document.createElement('div');
+      legend.style.marginTop = '8px';
+      const bar = document.createElement('div');
+      bar.style.height = '12px'; bar.style.width = '180px';
+      bar.style.background = {{this.gradient}};
+      const limits = document.createElement('div');
+      limits.style.display = 'flex'; limits.style.justifyContent = 'space-between';
+      const low = document.createElement('span'); low.textContent = '0';
+      const high = document.createElement('span');
+      limits.appendChild(low); limits.appendChild(high);
+      const scaleNote = document.createElement('div');
+      scaleNote.style.maxWidth = '200px'; scaleNote.style.fontSize = '11px';
+      legend.appendChild(bar); legend.appendChild(limits); legend.appendChild(scaleNote);
+      // Aktualisiert Rasterfarben, Tooltips und Legende nach der Merkmalsauswahl.
+      select.onchange = function() {
+        overview.setStyle(styleFor);
+        overview.eachLayer(bindCellTooltip);
+        detailLayers.forEach(part => {
+          part.setStyle(styleFor);
+          part.eachLayer(bindCellTooltip);
+        });
+        high.textContent = scales[select.value].toLocaleString('de-DE') +
+          (select.value === 'zensus_4_Einwohner' ? '+' : '');
+        scaleNote.textContent = select.value === 'zensus_4_Einwohner'
+          ? 'Einwohner je Zelle; Dunkelblau ab ' + scales[select.value].toLocaleString('de-DE') + '. Grau: keine Angabe.'
+          : 'Skala 0–100; Grau: keine Angabe.';
+      };
+      select.onchange();
+      panel.appendChild(select);
+      panel.appendChild(legend);
+      const note=document.createElement('div'); note.textContent={{this.note}};
+      panel.appendChild(note);
+      // Wechselt abhängig vom Zoom zwischen Übersicht und nachgeladenen Detailzellen.
+      const updateDetail = () => {
+        if (!availableTiles.size || map.getZoom() < switchZoom) {
+          wantedTiles = new Set();
+          detailLayers.forEach(part => map.removeLayer(part));
+          detailLayers.clear();
+          if (!map.hasLayer(overview)) map.addLayer(overview);
+          return;
+        }
+        if (map.hasLayer(overview)) map.removeLayer(overview);
+        const bounds = map.getBounds();
+        const nw = map.project(bounds.getNorthWest(), tileZoom);
+        const se = map.project(bounds.getSouthEast(), tileZoom);
+        const next = new Set();
+        for (let x = Math.floor(nw.x / 256) - 1; x <= Math.floor(se.x / 256) + 1; x++) {
+          for (let y = Math.floor(nw.y / 256) - 1; y <= Math.floor(se.y / 256) + 1; y++) {
+            const key = x + '/' + y;
+            if (availableTiles.has(key)) next.add(key);
+          }
+        }
+        wantedTiles = next;
+        detailLayers.forEach((part, key) => {
+          if (!next.has(key)) { map.removeLayer(part); detailLayers.delete(key); }
+        });
+        next.forEach(key => {
+          if (detailLayers.has(key) || pendingTiles.has(key)) return;
+          pendingTiles.add(key);
+          fetch('grid_tiles/' + tileZoom + '/' + key + '.geojson')
+            .then(response => { if (!response.ok) throw new Error('Kartenzellen konnten nicht geladen werden'); return response.json(); })
+            .then(data => {
+              if (!wantedTiles.has(key) || map.getZoom() < switchZoom) return;
+              const part = L.geoJSON(data, {pane: 'rasterPane', style: styleFor,
+                onEachFeature: (feature, cell) => bindCellTooltip(cell)});
+              part.addTo(map); detailLayers.set(key, part);
+            })
+            .catch(error => console.error(error))
+            .finally(() => pendingTiles.delete(key));
+        });
+      };
+      map.on('zoomend moveend', updateDetail);
+      updateDetail();
+      L.DomEvent.disableClickPropagation(panel); return panel;
+    }; control.addTo({{this.map}});
+    {% endmacro %}
+    
